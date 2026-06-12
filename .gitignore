@@ -1,0 +1,15 @@
+# secrets — never commit; use .env.example as the template
+.env
+
+# build artifacts
+backend-java/target/
+backend-rust/target/
+backend-node/node_modules/
+backend-go/certmgr-go
+
+# misc
+.DS_Store
+*.log
+nohup.out
+*.iml
+.idea/

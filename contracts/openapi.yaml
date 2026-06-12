@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: Certificate Management Service
+  version: 1.0.0
+  description: >
+    Lifecycle management for SSL/TLS key pairs: generation, CSR issuance,
+    signed-certificate-chain ingestion with cryptographic verification,
+    activation, compromise marking, soft deletion, and an append-only audit
+    trail. Implemented identically by four interchangeable backends
+    (Spring Boot :8081, Go :8082, Node.js :8083, Rust :8084) over one
+    PostgreSQL schema. See SPEC.md for normative implementation detail.
+
+servers:
+  - url: http://localhost:8081
+    description: Java / Spring Boot
+  - url: http://localhost:8082
+    description: Go
+  - url: http://localhost:8083
+    description: Node.js
+  - url: http://localhost:8084
+    description: Rust
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Liveness + DB connectivity
+      security: []
+      responses:
+        '200': { description: Healthy }
+        '503': { description: Database unreachable }
+
+  /api/v1/auth/token:
+    post:
+      summary: Exchange client credentials for a short-lived JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientId, clientSecret]
+              properties:
+                clientId: { type: string }
+                clientSecret: { type: string }
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  tokenType: { type: string, example: Bearer }
+                  expiresIn: { type: integer, example: 900 }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/v1/keys:
+    post:
+      summary: Generate a new SSL key pair (status CREATED)
+      description: >
+        The private key is generated inside the service boundary, encrypted
+        with AES-256-GCM before it touches the database, and returned in this
+        response. It is also retrievable later via /keys/{id}/private (each
+        access is audited).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, algorithm]
+              properties:
+                name: { type: string }
+                algorithm:
+                  type: string
+                  enum: [RSA_2048, RSA_3072, RSA_4096, EC_P256, EC_P384]
+      responses:
+        '201':
+          description: Key created (only response that contains privateKeyPem)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyDetailWithPrivate' }
+        '400': { $ref: '#/components/responses/Error' }
+    get:
+      summary: List all SSL keys (newest first; soft-deleted rows included)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [CREATED, READY_TO_PUBLISH, ACTIVE, COMPROMISED, DELETED]
+      responses:
+        '200':
+          description: Key summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/KeySummary' }
+                  total: { type: integer }
+
+  /api/v1/keys/{id}:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    get:
+      summary: Get one SSL key (never includes private key material)
+      responses:
+        '200':
+          description: Key detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      summary: Soft-delete a key (crypto-shred private material, keep evidence)
+      description: Forbidden for COMPROMISED keys — their record is frozen evidence.
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/v1/keys/{id}/private:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    get:
+      summary: Retrieve the decrypted private key PEM (audited on every access)
+      responses:
+        '200':
+          description: Private key material
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  privateKeyPem: { type: string }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: Key is COMPROMISED or DELETED }
+
+  /api/v1/keys/{id}/csr:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    post:
+      summary: Generate a PKCS#10 CSR signed with the stored private key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject]
+              properties:
+                subject:
+                  type: object
+                  required: [commonName]
+                  properties:
+                    commonName: { type: string }
+                    organization: { type: string }
+                    organizationalUnit: { type: string }
+                    country: { type: string, minLength: 2, maxLength: 2 }
+                    state: { type: string }
+                    locality: { type: string }
+                sans:
+                  type: array
+                  items: { type: string }
+                  description: DNS subject-alternative names
+      responses:
+        '200':
+          description: CSR PEM
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  csrPem: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/v1/keys/{id}/certificate:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    post:
+      summary: Upload the CA-signed certificate chain for this key
+      description: >
+        PEM chain, leaf first. The service verifies (1) the leaf public key is
+        byte-identical to the stored public key, (2) every certificate is
+        signed by its successor and DNs link up, (3) a trailing self-signed
+        root verifies its own signature, (4) all validity windows include now.
+        Only then does the key transition to READY_TO_PUBLISH. Rejections are
+        audited as CERTIFICATE_REJECTED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [certificateChainPem]
+              properties:
+                certificateChainPem: { type: string }
+      responses:
+        '200':
+          description: Chain verified and stored; status READY_TO_PUBLISH
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyDetail' }
+        '400': { description: 'INVALID_PEM: unparseable chain' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: 'INVALID_STATE: key not CREATED/READY_TO_PUBLISH' }
+        '422': { description: 'KEY_MISMATCH | CHAIN_BROKEN | CERT_NOT_VALID' }
+
+  /api/v1/keys/{id}/activate:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    post:
+      summary: Activate a key (READY_TO_PUBLISH -> ACTIVE only)
+      responses:
+        '200':
+          description: Activated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/v1/keys/{id}/compromise:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    post:
+      summary: Mark a key as compromised (terminal, undeletable)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          description: Marked compromised
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/v1/keys/{id}/audit:
+    parameters: [ { $ref: '#/components/parameters/KeyId' } ]
+    get:
+      summary: Append-only audit trail for this key (oldest first)
+      responses:
+        '200':
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    KeyId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum: [UNAUTHORIZED, NOT_FOUND, INVALID_REQUEST, INVALID_PEM,
+                           KEY_MISMATCH, CHAIN_BROKEN, CERT_NOT_VALID,
+                           INVALID_STATE, INTERNAL]
+                  message: { type: string }
+
+  schemas:
+    KeySummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        algorithm: { type: string }
+        status: { type: string }
+        fingerprintSha256: { type: string }
+        hasCertificate: { type: boolean }
+        certNotAfter: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    KeyDetail:
+      allOf:
+        - $ref: '#/components/schemas/KeySummary'
+        - type: object
+          properties:
+            publicKeyPem: { type: string }
+            certificateChainPem: { type: string, nullable: true }
+            certificate:
+              type: object
+              nullable: true
+              properties:
+                subject: { type: string }
+                issuer: { type: string }
+                serialNumber: { type: string }
+                notBefore: { type: string, format: date-time }
+                notAfter: { type: string, format: date-time }
+            compromisedReason: { type: string, nullable: true }
+            createdBy: { type: string }
+
+    KeyDetailWithPrivate:
+      allOf:
+        - $ref: '#/components/schemas/KeyDetail'
+        - type: object
+          properties:
+            privateKeyPem:
+              type: string
+              description: Present ONLY in the POST /api/v1/keys response.
+
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        keyId: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [KEY_GENERATED, CSR_ISSUED, CERTIFICATE_UPLOADED,
+                 CERTIFICATE_REJECTED, ACTIVATED, COMPROMISED, DELETED,
+                 PRIVATE_KEY_ACCESSED]
+        actor: { type: string }
+        backend: { type: string, enum: [java, go, node, rust] }
+        detail: { type: object, nullable: true }
+        occurredAt: { type: string, format: date-time }

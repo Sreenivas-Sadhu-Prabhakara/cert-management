@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: certmgr-postgres
+    environment:
+      POSTGRES_DB: certmgr
+      POSTGRES_USER: certmgr
+      POSTGRES_PASSWORD: certmgr
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - certmgr-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certmgr -d certmgr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  certmgr-pgdata:

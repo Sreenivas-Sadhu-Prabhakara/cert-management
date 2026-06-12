@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Certificate Management — One Contract, Four Implementations</title>
+<meta name="description" content="Zero-trust SSL/TLS key lifecycle: generation, CSR issuance, cryptographically verified chain ingestion, activation, compromise handling and an append-only audit trail — implemented identically in Java, Go, Node.js and Rust.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f5f0e4;
+  --paper-deep:#ede6d3;
+  --ink:#1c2a22;
+  --ink-soft:#41523f;
+  --green:#1e5b46;
+  --green-deep:#0f3a2c;
+  --seal:#b03a28;
+  --amber:#a3742a;
+  --line:#cdc1a5;
+  --line-soft:#ddd3bb;
+  --mono:'IBM Plex Mono',monospace;
+  --serif:'Newsreader',serif;
+  --display:'Fraunces',serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-size:19px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+/* paper grain */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:999;opacity:.5;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .04 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.sheet{max-width:1060px;margin:0 auto;padding:0 32px}
+
+/* ───────── masthead ───────── */
+header{
+  border-bottom:3px double var(--line);
+  background:
+    radial-gradient(ellipse 90% 70% at 50% -20%, rgba(30,91,70,.07), transparent 60%),
+    var(--paper);
+  position:relative;overflow:hidden;
+}
+.rosette{position:absolute;opacity:.16;pointer-events:none}
+.rosette.tl{top:-110px;left:-110px}
+.rosette.br{bottom:-130px;right:-130px;transform:rotate(18deg)}
+.mast{padding:84px 0 64px;position:relative}
+.kicker{
+  font-family:var(--mono);font-size:12.5px;letter-spacing:.32em;text-transform:uppercase;
+  color:var(--green);display:flex;align-items:center;gap:14px;margin-bottom:30px;
+}
+.kicker::before,.kicker::after{content:"";height:1px;background:var(--line);flex:0 0 56px}
+h1{
+  font-family:var(--display);font-weight:600;font-size:clamp(42px,6.4vw,76px);
+  line-height:1.04;letter-spacing:-.015em;max-width:17ch;
+}
+h1 em{font-style:italic;font-weight:400;color:var(--green)}
+.lede{
+  margin-top:28px;max-width:62ch;font-size:21.5px;color:var(--ink-soft);
+}
+.lede strong{color:var(--ink);font-weight:500}
+.mast-row{display:flex;flex-wrap:wrap;gap:14px;margin-top:40px;align-items:center}
+.btn{
+  font-family:var(--mono);font-size:14px;letter-spacing:.06em;text-decoration:none;
+  padding:13px 26px;border:1.5px solid var(--green-deep);color:var(--green-deep);
+  background:transparent;transition:all .18s ease;display:inline-block;
+}
+.btn.primary{background:var(--green-deep);color:var(--paper)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 6px 0 -2px rgba(15,58,44,.25)}
+.ports{
+  font-family:var(--mono);font-size:13px;color:var(--ink-soft);
+  display:flex;gap:0;border:1px solid var(--line);margin-left:auto;
+}
+.ports span{padding:10px 16px;border-right:1px solid var(--line)}
+.ports span:last-child{border-right:0}
+.ports b{color:var(--green);font-weight:600}
+
+/* ───────── section chrome ───────── */
+section{padding:88px 0 26px;position:relative}
+.secno{
+  font-family:var(--mono);font-size:13px;color:var(--seal);letter-spacing:.22em;
+  text-transform:uppercase;display:flex;align-items:baseline;gap:16px;margin-bottom:18px;
+}
+.secno::after{content:"";height:1px;background:var(--line);flex:1;transform:translateY(-4px)}
+h2{
+  font-family:var(--display);font-weight:600;font-size:clamp(30px,3.6vw,44px);
+  letter-spacing:-.01em;line-height:1.12;max-width:24ch;margin-bottom:26px;
+}
+h2 em{font-style:italic;font-weight:400;color:var(--green)}
+.prose{max-width:70ch;color:var(--ink-soft)}
+.prose p+p{margin-top:1em}
+.prose strong{color:var(--ink);font-weight:500}
+.prose code, td code, .il{
+  font-family:var(--mono);font-size:.82em;background:var(--paper-deep);
+  border:1px solid var(--line-soft);padding:1px 6px;color:var(--green-deep);white-space:nowrap;
+}
+
+/* ───────── implementations ───────── */
+.impl-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--ink);margin-top:44px}
+.impl{
+  padding:30px 26px 26px;border-right:1px solid var(--line);position:relative;
+  background:linear-gradient(180deg,transparent 60%,rgba(30,91,70,.04));
+}
+.impl:last-child{border-right:0}
+.impl h3{font-family:var(--display);font-size:25px;font-weight:600;margin-bottom:4px}
+.impl .rt{font-family:var(--mono);font-size:12px;color:var(--ink-soft);letter-spacing:.04em}
+.impl .port{
+  font-family:var(--mono);font-size:30px;color:var(--green);margin-top:20px;font-weight:500;
+}
+.impl .port small{font-size:12px;color:var(--ink-soft);display:block;letter-spacing:.18em;text-transform:uppercase;margin-top:2px}
+.impl::before{
+  content:attr(data-n);position:absolute;top:12px;right:14px;
+  font-family:var(--mono);font-size:11px;color:var(--line);
+}
+.proof{
+  margin-top:0;border:1.5px solid var(--ink);border-top:0;background:var(--green-deep);
+  color:#e9e2cd;padding:22px 28px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;
+  font-family:var(--mono);font-size:14px;
+}
+.proof b{color:#fff;letter-spacing:.06em}
+.proof .tick{color:#8fd0a9}
+
+/* ───────── lifecycle ───────── */
+.flow{
+  display:flex;align-items:stretch;gap:0;margin:48px 0 10px;flex-wrap:wrap;
+}
+.state{
+  flex:1;min-width:150px;border:1.5px solid var(--ink);padding:20px 18px 16px;text-align:center;position:relative;
+  background:var(--paper);
+}
+.state+.state{margin-left:-1.5px}
+.state .nm{font-family:var(--mono);font-weight:600;font-size:14.5px;letter-spacing:.08em}
+.state .via{font-family:var(--mono);font-size:11px;color:var(--ink-soft);display:block;margin-top:8px;letter-spacing:.04em}
+.state .dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-bottom:10px}
+.s-created .dot{background:#5b6d7a}.s-ready .dot{background:var(--amber)}
+.s-active .dot{background:var(--green)}.s-active{background:rgba(30,91,70,.08)}
+.terminals{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:26px}
+.term{border:1.5px solid var(--ink);padding:26px 28px;position:relative;overflow:hidden}
+.term.comp{border-color:var(--seal)}
+.term h4{font-family:var(--mono);font-size:15px;letter-spacing:.1em;margin-bottom:10px;display:flex;gap:10px;align-items:center}
+.term.comp h4{color:var(--seal)}
+.term p{font-size:16.5px;color:var(--ink-soft);max-width:46ch}
+.wax{
+  position:absolute;right:-26px;top:-26px;width:108px;height:108px;border-radius:50%;
+  background:radial-gradient(circle at 35% 35%, #c9523c, var(--seal) 60%, #7e2317);
+  display:flex;align-items:center;justify-content:center;transform:rotate(-14deg);
+  box-shadow:inset 0 0 0 6px rgba(255,255,255,.12), 0 4px 14px rgba(126,35,23,.35);
+  color:#f7e9dc;font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;text-align:center;line-height:1.5;
+}
+.rule{font-family:var(--mono);font-size:13px;color:var(--ink-soft);margin-top:30px;border-left:3px solid var(--amber);padding:6px 0 6px 18px;max-width:74ch}
+
+/* ───────── verification ───────── */
+.checks{counter-reset:chk;margin-top:40px;border-top:1.5px solid var(--ink)}
+.check{
+  display:grid;grid-template-columns:90px 280px 1fr;gap:28px;align-items:baseline;
+  padding:30px 6px;border-bottom:1px solid var(--line);
+}
+.check::before{
+  counter-increment:chk;content:"0" counter(chk);
+  font-family:var(--display);font-size:46px;font-weight:300;font-style:italic;color:var(--green);line-height:1;
+}
+.check h4{font-family:var(--mono);font-size:14.5px;letter-spacing:.08em}
+.check h4 span{display:block;color:var(--seal);font-size:11.5px;margin-top:6px;letter-spacing:.14em}
+.check p{font-size:17px;color:var(--ink-soft)}
+
+/* ───────── zero trust table ───────── */
+.zt{width:100%;border-collapse:collapse;margin-top:42px;border:1.5px solid var(--ink)}
+.zt th{
+  font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;text-align:left;
+  background:var(--green-deep);color:#e9e2cd;padding:14px 22px;font-weight:500;
+}
+.zt td{
+  padding:20px 22px;border-bottom:1px solid var(--line);vertical-align:top;font-size:16.5px;color:var(--ink-soft);
+}
+.zt tr:last-child td{border-bottom:0}
+.zt td:first-child{width:46%;border-right:1px solid var(--line);color:var(--ink)}
+.zt td b{font-family:var(--mono);font-size:13px;color:var(--green);font-weight:600;letter-spacing:.04em;display:block;margin-bottom:6px;text-transform:uppercase}
+
+/* ───────── quickstart / code ───────── */
+.codecard{
+  background:var(--green-deep);color:#dfe8d9;border:1.5px solid var(--ink);
+  margin-top:36px;font-family:var(--mono);font-size:14px;line-height:1.75;overflow-x:auto;
+}
+.codecard .bar{
+  display:flex;justify-content:space-between;padding:10px 20px;border-bottom:1px solid rgba(233,226,205,.18);
+  font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;color:#a9c4b1;
+}
+.codecard pre{padding:24px 26px;white-space:pre}
+.codecard .c{color:#7e9d89}
+.codecard .g{color:#9fd8b4}
+.codecard .y{color:#e7c97f}
+
+/* ───────── api table ───────── */
+.api{width:100%;border-collapse:collapse;margin-top:40px;font-size:15.5px}
+.api td{padding:13px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+.api td:first-child{white-space:nowrap;width:1%}
+.api .m{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.05em;padding:3px 9px;border:1px solid currentColor;margin-right:10px;display:inline-block;min-width:52px;text-align:center}
+.api .get{color:var(--green)}
+.api .post{color:#205a7a}
+.api .del{color:var(--seal)}
+.api .pth{font-family:var(--mono);font-size:13.5px;color:var(--ink)}
+.api td:last-child{color:var(--ink-soft)}
+.api .lock{font-family:var(--mono);font-size:11px;color:var(--amber);letter-spacing:.1em}
+
+/* ───────── errors ───────── */
+.errs{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+.err{border:1px solid var(--line);padding:18px 20px;background:rgba(237,230,211,.5)}
+.err b{font-family:var(--mono);font-size:13px;color:var(--seal);letter-spacing:.06em;display:block;margin-bottom:6px}
+.err span{font-size:15px;color:var(--ink-soft)}
+
+/* ───────── footer ───────── */
+footer{
+  margin-top:110px;border-top:3px double var(--line);padding:54px 0 70px;position:relative;overflow:hidden;
+}
+.foot{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-end}
+.foot .sig{font-family:var(--display);font-style:italic;font-size:23px;color:var(--green)}
+.foot .meta{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);line-height:2;text-align:right}
+.foot a{color:var(--green-deep)}
+
+/* reveal on scroll */
+.rv{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s ease}
+.rv.in{opacity:1;transform:none}
+
+@media(max-width:900px){
+  .impl-grid{grid-template-columns:1fr 1fr}
+  .impl:nth-child(2){border-right:0}
+  .impl{border-bottom:1px solid var(--line)}
+  .check{grid-template-columns:64px 1fr;}
+  .check p{grid-column:2}
+  .terminals{grid-template-columns:1fr}
+  .errs{grid-template-columns:1fr 1fr}
+  .ports{margin-left:0}
+}
+@media(max-width:600px){
+  body{font-size:17px}
+  .impl-grid{grid-template-columns:1fr}
+  .impl{border-right:0}
+  .errs{grid-template-columns:1fr}
+  .zt td:first-child{width:auto}
+  .zt,.zt tbody,.zt tr,.zt td{display:block;border-right:0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="rosette tl" width="340" height="340" viewBox="0 0 340 340" aria-hidden="true">
+    <g fill="none" stroke="#1e5b46" stroke-width=".7">
+      <circle cx="170" cy="170" r="160"/><circle cx="170" cy="170" r="130"/><circle cx="170" cy="170" r="100"/>
+      <g id="pet">
+        <ellipse cx="170" cy="60" rx="22" ry="58"/>
+      </g>
+      <use href="#pet" transform="rotate(30 170 170)"/><use href="#pet" transform="rotate(60 170 170)"/>
+      <use href="#pet" transform="rotate(90 170 170)"/><use href="#pet" transform="rotate(120 170 170)"/>
+      <use href="#pet" transform="rotate(150 170 170)"/><use href="#pet" transform="rotate(180 170 170)"/>
+      <use href="#pet" transform="rotate(210 170 170)"/><use href="#pet" transform="rotate(240 170 170)"/>
+      <use href="#pet" transform="rotate(270 170 170)"/><use href="#pet" transform="rotate(300 170 170)"/>
+      <use href="#pet" transform="rotate(330 170 170)"/>
+    </g>
+  </svg>
+  <svg class="rosette br" width="380" height="380" viewBox="0 0 340 340" aria-hidden="true">
+    <g fill="none" stroke="#1e5b46" stroke-width=".7">
+      <circle cx="170" cy="170" r="160"/><circle cx="170" cy="170" r="118"/>
+      <use href="#pet"/><use href="#pet" transform="rotate(45 170 170)"/>
+      <use href="#pet" transform="rotate(90 170 170)"/><use href="#pet" transform="rotate(135 170 170)"/>
+      <use href="#pet" transform="rotate(180 170 170)"/><use href="#pet" transform="rotate(225 170 170)"/>
+      <use href="#pet" transform="rotate(270 170 170)"/><use href="#pet" transform="rotate(315 170 170)"/>
+    </g>
+  </svg>
+
+  <div class="sheet mast">
+    <p class="kicker">Specification &amp; Field Manual · v1.0</p>
+    <h1>One contract.<br>Four implementations.<br><em>Zero ambient trust.</em></h1>
+    <p class="lede">
+      A custody service for the riskiest object in any TLS deployment — the
+      <strong>private key</strong> — from generation through CSR, cryptographically
+      verified certificate-chain ingestion, activation, compromise and crypto-shredded
+      deletion. Implemented <strong>identically in Java, Go, Node.js and Rust</strong>
+      over one PostgreSQL schema, with an append-only audit trail enforced by the database itself.
+    </p>
+    <div class="mast-row">
+      <a class="btn primary" href="https://github.com/Sreenivas-Sadhu-Prabhakara/cert-management">Source repository</a>
+      <a class="btn" href="#quickstart">Quick start</a>
+      <div class="ports">
+        <span>java <b>:8081</b></span><span>go <b>:8082</b></span><span>node <b>:8083</b></span><span>rust <b>:8084</b></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="sheet">
+
+<!-- ────────────────── 01 implementations ────────────────── -->
+<section id="implementations">
+  <p class="secno rv">§ 01 — The Premise</p>
+  <h2 class="rv">The contract is the trust anchor, <em>not the code.</em></h2>
+  <div class="prose rv">
+    <p>
+      Most services ask you to trust an implementation. This one doesn't. Four programs,
+      written independently in four languages with four dependency trees, implement a single
+      normative specification against a single database. Any client may speak to any backend
+      and observe <strong>identical status codes, identical JSON, identical cryptography</strong> —
+      byte-for-byte fingerprints, interchangeable AES-GCM ciphertext, one shared JWT realm.
+    </p>
+    <p>
+      No single runtime or supply chain is load-bearing. Replace any of them overnight;
+      the verified behaviour is what persists. That is Zero Trust applied to your own stack.
+    </p>
+  </div>
+
+  <div class="impl-grid rv">
+    <div class="impl" data-n="i."><h3>Java</h3><div class="rt">Spring Boot · JDBC · Bouncy Castle</div><div class="port">:8081<small>port</small></div></div>
+    <div class="impl" data-n="ii."><h3>Go</h3><div class="rt">net/http · pgx · stdlib crypto</div><div class="port">:8082<small>port</small></div></div>
+    <div class="impl" data-n="iii."><h3>Node.js</h3><div class="rt">Express · pg · WebCrypto</div><div class="port">:8083<small>port</small></div></div>
+    <div class="impl" data-n="iv."><h3>Rust</h3><div class="rt">axum · sqlx · RustCrypto</div><div class="port">:8084<small>port</small></div></div>
+  </div>
+  <div class="proof rv">
+    <b>PROVEN, NOT PROMISED</b>
+    <span><span class="tick">✓</span> 30-check lifecycle suite × 4 backends</span>
+    <span><span class="tick">✓</span> relay: key generated by Java → CSR by Go → chain verified by Node → activated by Rust</span>
+    <span><span class="tick">✓</span> identical JSON from all four for the same row</span>
+  </div>
+</section>
+
+<!-- ────────────────── 02 lifecycle ────────────────── -->
+<section id="lifecycle">
+  <p class="secno rv">§ 02 — The Lifecycle</p>
+  <h2 class="rv">A key is not usable at birth. <em>Trust is earned by verification.</em></h2>
+  <div class="prose rv">
+    <p>
+      The state machine makes the secure path the <strong>only</strong> path. A freshly
+      generated key has no proof that any authority vouches for it — so activation is only
+      reachable <em>through</em> a cryptographically verified certificate chain. There is no
+      flag to skip it, no admin override, no side door.
+    </p>
+  </div>
+
+  <div class="flow rv">
+    <div class="state s-created"><span class="dot"></span><div class="nm">CREATED</div><span class="via">POST /keys · key pair born inside the boundary</span></div>
+    <div class="state s-ready"><span class="dot"></span><div class="nm">READY_TO_PUBLISH</div><span class="via">POST /keys/{id}/certificate · chain verified</span></div>
+    <div class="state s-active"><span class="dot"></span><div class="nm">ACTIVE</div><span class="via">POST /keys/{id}/activate · only from READY</span></div>
+  </div>
+
+  <div class="terminals rv">
+    <div class="term comp">
+      <div class="wax">TERMINAL<br>STATE</div>
+      <h4>● COMPROMISED</h4>
+      <p>Reachable from any live state. <strong>Cannot be deleted, cannot be reactivated.</strong>
+      A compromised key's record is incident evidence — containment must never enable cover-up.</p>
+    </div>
+    <div class="term">
+      <h4>○ DELETED</h4>
+      <p>Soft delete: the ciphertext is destroyed — <strong>crypto-shredding</strong> — but the row,
+      fingerprint, certificate metadata and full audit history remain. The secret dies;
+      the accountability does not.</p>
+    </div>
+  </div>
+  <p class="rule rv">RULE — every transition is an atomic compare-and-set in PostgreSQL
+  (<span class="il">UPDATE … WHERE status IN (…)</span>); concurrent operators cannot race a key into an illegal state.</p>
+</section>
+
+<!-- ────────────────── 03 ingestion ────────────────── -->
+<section id="ingestion">
+  <p class="secno rv">§ 03 — Chain Ingestion</p>
+  <h2 class="rv">Nothing private ever crosses the boundary inward. <em>And even public material must prove itself.</em></h2>
+  <div class="prose rv">
+    <p>
+      This service deliberately has <strong>no private-key import</strong>. The only thing it
+      ingests is the CA-signed certificate chain for a key it generated itself — and before that
+      chain is stored, three proofs are demanded, in order, first failure wins:
+    </p>
+  </div>
+
+  <div class="checks rv">
+    <div class="check">
+      <h4>PUBLIC-KEY BINDING<span>422 · KEY_MISMATCH</span></h4>
+      <p>The leaf certificate's SubjectPublicKeyInfo must be <strong>byte-identical</strong> to the stored
+      public key. The right certificate for the wrong key — by mistake or by substitution — is refused at the door.</p>
+    </div>
+    <div class="check">
+      <h4>CHAIN INTEGRITY<span>422 · CHAIN_BROKEN</span></h4>
+      <p>Every certificate must be signed by its successor: signature verified, issuer/subject distinguished
+      names linked, and a trailing self-signed root must verify its own signature. "Probably fine" is not a verdict.</p>
+    </div>
+    <div class="check">
+      <h4>VALIDITY WINDOWS<span>422 · CERT_NOT_VALID</span></h4>
+      <p>Expired or not-yet-valid certificates anywhere in the chain are rejected now — not discovered
+      in production later. Every rejection is itself recorded in the audit trail.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────── 04 zero trust ────────────────── -->
+<section id="zero-trust">
+  <p class="secno rv">§ 04 — Why It Must Be This Way</p>
+  <h2 class="rv">Every decision maps to a <em>Zero Trust</em> principle.</h2>
+  <div class="prose rv">
+    <p>Zero Trust (NIST SP 800-207) abandons the trusted interior: authenticate every request,
+    verify every artifact, record every action, assume breach. The architecture is the argument:</p>
+  </div>
+
+  <table class="zt rv">
+    <tr><th>Design decision</th><th>Principle it serves</th></tr>
+    <tr>
+      <td><b>Keys born inside, never imported</b>Private keys are generated within the service boundary; the only ingestion is public material, cryptographically verified.</td>
+      <td>Never trust, always verify — the provenance of every private key is known with certainty. Nothing is taken on faith.</td>
+    </tr>
+    <tr>
+      <td><b>JWT on every request</b>HS256, issuer and expiry checked; 15-minute tokens; constant-time credential comparison.</td>
+      <td>No ambient trust. Being on the network grants nothing; identity is re-proven per request and expires quickly.</td>
+    </tr>
+    <tr>
+      <td><b>AES-256-GCM at rest, AAD = record UUID</b>Each ciphertext is cryptographically bound to its own database row.</td>
+      <td>Assume breach. A stolen dump yields ciphertext; even partial write access can't swap one key's ciphertext into another's record undetected.</td>
+    </tr>
+    <tr>
+      <td><b>Dedicated, audited <span class="il">/private</span> endpoint</b>List and detail responses never carry private material; every private read writes <span class="il">PRIVATE_KEY_ACCESSED</span>.</td>
+      <td>Least privilege, full visibility. The dangerous operation is deliberate, separated, and leaves a trace every single time.</td>
+    </tr>
+    <tr>
+      <td><b>Append-only audit, enforced by trigger</b>Audit rows are written in the same transaction as the state change; UPDATE/DELETE on the audit table raises an exception.</td>
+      <td>Evidence over memory. Even the services themselves cannot rewrite history; a state change cannot commit without its audit event.</td>
+    </tr>
+    <tr>
+      <td><b>Soft delete = crypto-shredding</b>Key material destroyed, record retained.</td>
+      <td>Inventory is a security control. "We don't know what keys we've had" is how outages and orphaned trust happen.</td>
+    </tr>
+    <tr>
+      <td><b>Four interchangeable implementations</b>One OpenAPI contract, one schema, one conformance suite.</td>
+      <td>Trust the contract, not the code. Components are replaceable and continuously verified — never pets.</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ────────────────── 05 quickstart ────────────────── -->
+<section id="quickstart">
+  <p class="secno rv">§ 05 — Field Instructions</p>
+  <h2 class="rv">Running the platform.</h2>
+
+  <div class="codecard rv">
+    <div class="bar"><span>quick start</span><span>shell</span></div>
+    <pre><span class="c"># database — schema auto-applies, listens on :5434</span>
+docker compose up -d
+
+<span class="c"># secrets — copy and fill (JWT secret, client creds, 32-byte master key)</span>
+cp .env.example .env
+
+<span class="c"># run any backend — or all four; they are interchangeable</span>
+(cd backend-go   &amp;&amp; set -a; source ../.env; set +a; PORT=8082 BACKEND_NAME=go   go run .)
+(cd backend-java &amp;&amp; set -a; source ../.env; set +a; PORT=8081 BACKEND_NAME=java mvn spring-boot:run)
+
+<span class="c"># the client UI (connect to any backend from the login screen)</span>
+(cd ui &amp;&amp; flutter run -d chrome)
+
+<span class="c"># prove a backend honours the full contract — 30 lifecycle checks</span>
+./scripts/smoke.sh 8082
+<span class="g">SMOKE PASSED (30 checks) on port 8082</span>
+
+<span class="c"># prove interchangeability — one key, four implementations</span>
+./scripts/relay.sh
+<span class="g">RELAY PASSED — one key, four interchangeable implementations</span></pre>
+  </div>
+
+  <div class="codecard rv">
+    <div class="bar"><span>the lifecycle, in four calls</span><span>curl</span></div>
+    <pre><span class="c"># 1 · authenticate — every subsequent request carries this token</span>
+TOKEN=$(curl -s $BASE/api/v1/auth/token -d '{"clientId":"…","clientSecret":"…"}' | jq -r .accessToken)
+
+<span class="c"># 2 · generate a key pair → CREATED  (the only response carrying privateKeyPem)</span>
+curl -s $BASE/api/v1/keys -H "Authorization: Bearer $TOKEN" \
+     -d '{"name":"web-frontend-2026","algorithm":"EC_P256"}'
+
+<span class="c"># 3 · CSR for your CA → send it out-of-band, get a signed chain back</span>
+curl -s $BASE/api/v1/keys/$ID/csr -H "Authorization: Bearer $TOKEN" \
+     -d '{"subject":{"commonName":"www.example.test"},"sans":["www.example.test"]}'
+
+<span class="c"># 4 · upload the chain → verified → READY_TO_PUBLISH → activate → ACTIVE</span>
+curl -s $BASE/api/v1/keys/$ID/certificate -H "Authorization: Bearer $TOKEN" \
+     -d "{\"certificateChainPem\": $(jq -Rs . &lt; chain.pem)}"
+curl -s -X POST $BASE/api/v1/keys/$ID/activate -H "Authorization: Bearer $TOKEN"</pre>
+  </div>
+</section>
+
+<!-- ────────────────── 06 api ────────────────── -->
+<section id="api">
+  <p class="secno rv">§ 06 — The Contract</p>
+  <h2 class="rv">Twelve endpoints, <em>identical on every port.</em></h2>
+
+  <table class="api rv">
+    <tr><td><span class="m get">GET</span><span class="pth">/health</span></td><td>Liveness + database connectivity. The only other unauthenticated route is the token endpoint.</td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/auth/token</span></td><td>Client credentials → short-lived HS256 bearer token.</td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/keys</span></td><td>Generate RSA 2048/3072/4096 or EC P-256/P-384 → <span class="il">CREATED</span>. Sole response containing <span class="il">privateKeyPem</span>.</td></tr>
+    <tr><td><span class="m get">GET</span><span class="pth">/api/v1/keys?status=…</span></td><td>Inventory, newest first — deleted rows included, by design.</td></tr>
+    <tr><td><span class="m get">GET</span><span class="pth">/api/v1/keys/{id}</span></td><td>Full detail: public key, certificate, chain. Never private material.</td></tr>
+    <tr><td><span class="m get">GET</span><span class="pth">/api/v1/keys/{id}/private</span></td><td>Decrypted private key. <span class="lock">EVERY ACCESS AUDITED</span></td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/keys/{id}/csr</span></td><td>PKCS#10 signed by the stored key — subject DN + DNS SANs.</td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/keys/{id}/certificate</span></td><td>Signed-chain ingestion: binding → integrity → validity → <span class="il">READY_TO_PUBLISH</span>.</td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/keys/{id}/activate</span></td><td>Only from <span class="il">READY_TO_PUBLISH</span>. There is no other road to <span class="il">ACTIVE</span>.</td></tr>
+    <tr><td><span class="m post">POST</span><span class="pth">/api/v1/keys/{id}/compromise</span></td><td>Terminal. Blocks deletion, blocks private-key reads, freezes the record as evidence.</td></tr>
+    <tr><td><span class="m del">DEL</span><span class="pth">/api/v1/keys/{id}</span></td><td>Soft delete — crypto-shreds the ciphertext, keeps the evidence row. Refused for compromised keys.</td></tr>
+    <tr><td><span class="m get">GET</span><span class="pth">/api/v1/keys/{id}/audit</span></td><td>The append-only timeline, oldest first, tagged with the implementation that handled each event.</td></tr>
+  </table>
+
+  <div class="errs rv">
+    <div class="err"><b>KEY_MISMATCH</b><span>Leaf certificate's public key ≠ stored public key.</span></div>
+    <div class="err"><b>CHAIN_BROKEN</b><span>Signature or DN linkage failure inside the chain.</span></div>
+    <div class="err"><b>CERT_NOT_VALID</b><span>A certificate outside its validity window.</span></div>
+    <div class="err"><b>INVALID_STATE</b><span>Operation illegal for the key's current status.</span></div>
+    <div class="err"><b>INVALID_PEM</b><span>Chain that does not parse as X.509 PEM.</span></div>
+    <div class="err"><b>UNAUTHORIZED</b><span>Missing or invalid credentials or token.</span></div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="sheet foot">
+    <div>
+      <div class="sig">Trust nothing. Verify everything. Record it all.</div>
+    </div>
+    <div class="meta">
+      <a href="https://github.com/Sreenivas-Sadhu-Prabhakara/cert-management">github.com/Sreenivas-Sadhu-Prabhakara/cert-management</a><br>
+      SPEC.md — normative specification · contracts/openapi.yaml — API contract<br>
+      docs/HOW-TO.md — full how-to &amp; design rationale
+    </div>
+  </div>
+</footer>
+
+<script>
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.rv').forEach((el,i)=>{el.style.transitionDelay=(i%4)*60+'ms';io.observe(el)});
+</script>
+</body>
+</html>
